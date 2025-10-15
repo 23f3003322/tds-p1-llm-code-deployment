@@ -2,7 +2,7 @@
 title: LLM Code Deployment API
 emoji: 🚀
 colorFrom: indigo
-colorTo: teal
+colorTo: red
 sdk: docker
 sdk_version: "0.0.1"
 app_file: app/main.py
