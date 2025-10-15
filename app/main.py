@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, status, Request
-from models import TaskRequest
-from utils import validate_secret
+from .models import TaskRequest
+from .utils import validate_secret
 app = FastAPI()
 
 @app.post("/handle-task")
