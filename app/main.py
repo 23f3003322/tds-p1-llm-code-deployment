@@ -25,7 +25,6 @@ async def handle_task(request: TaskRequest, background_tasks: BackgroundTasks):
         }
     )
     if request.round == 1 or request.round =="1":
-        print("in round 1")
         background_tasks.add_task(round1, request)
     elif request.round ==2 or request.round =="2":
         background_tasks.add_task(round2)

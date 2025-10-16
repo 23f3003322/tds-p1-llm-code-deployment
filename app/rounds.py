@@ -1,6 +1,6 @@
 from .models import TaskRequest
-from .deployer import create_github_repo,notify_evaluation_url
-
+from .deployer import create_github_repo,notify_evaluation_url,push_files_to_github_repo,enable_github_pages
+from .llm import genereate_code_with_llm
 
 def round2():
     print("inside round 2")
@@ -10,9 +10,14 @@ async def  round1(request: TaskRequest):
     try:
         repo_response = await create_github_repo(repo_name=request.task)
         repo_url = repo_response.get("html_url", "")
-        # Temporary placeholders for commit_sha and pages_url
-        commit_sha = ""
-        pages_url = ""
+
+        files = await genereate_code_with_llm(request)
+
+        commit_sha = await push_files_to_github_repo(repo=request.task,files=files)
+        # commit_sha = await push_files_to_github_repo(repo=request.task)
+        
+        pages_response = await enable_github_pages(repo=request.task)
+        pages_url = pages_response.get("html_url")
 
         # Prepare payload
         payload = {

@@ -14,3 +14,7 @@ class TaskRequest(BaseModel):
     checks: List[str]
     evaluation_url: str
     attachments: Optional[List[Attachment]] = None
+
+class FileContext(BaseModel):
+    file_name: str
+    file_content: str
