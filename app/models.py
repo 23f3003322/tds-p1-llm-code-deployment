@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional,Any
 from pydantic import BaseModel
 class Attachment(BaseModel):
     name: str
@@ -11,7 +11,7 @@ class TaskRequest(BaseModel):
     round: int
     nonce: str
     brief: str
-    checks: List[str]
+    checks: Any
     evaluation_url: str
     attachments: Optional[List[Attachment]] = None
 

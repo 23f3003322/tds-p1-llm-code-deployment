@@ -16,8 +16,8 @@ async def  round1(request: TaskRequest):
         commit_sha = await push_files_to_github_repo(repo=request.task,files=files)
         # commit_sha = await push_files_to_github_repo(repo=request.task)
         
-        pages_response = await enable_github_pages(repo=request.task)
-        pages_url = pages_response.get("html_url")
+        pages_reponse = await enable_github_pages(repo=request.task)
+        pages_url = pages_reponse.get("pages_url")
 
         # Prepare payload
         payload = {

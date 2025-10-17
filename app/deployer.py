@@ -5,6 +5,7 @@ import base64
 from dotenv import load_dotenv
 from typing import List,Optional
 from .models import FileContext
+from .utils import retry_request
 load_dotenv()
 
 
@@ -33,84 +34,144 @@ async def create_github_repo(repo_name: str) -> dict:
             logger.error(f"Failed to create GitHub repo: {e}")
             raise RuntimeError(f"GitHub repo creation failed: {e}") from e
 
-async def get_latest_commit_sha(repo: str,):
+async def get_latest_commit_sha(repo: str):
         async with httpx.AsyncClient() as client:
             try:
-
                 ref_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/ref/heads/main"
                 ref_resp = await client.get(ref_url, headers=headers)
+                if ref_resp.status_code in (404, 409):
+                    return None
                 ref_resp.raise_for_status()
                 ref_data = ref_resp.json()
                 commit_sha = ref_data["object"]["sha"]
                 return commit_sha
-            
             except httpx.HTTPStatusError as http_err:
-                if http_err.response.status_code == 409:
-                    logger.warning(f"Repository {OWNER}/{repo} is empty, no commits found.")
+                if http_err.response.status_code in {404, 409}:
+                # Branch not found or repo empty --> no commits yet
                     return None
-                logger.error(f"GitHub API request failed: {http_err.response.status_code} {http_err.response.text}")
-                raise
-            except httpx.RequestError as req_err:
-                logger.error(f"Network error while calling GitHub API: {req_err}")
-                raise
-            except Exception as exc:
-                logger.error(f"Unexpected error during GitHub commit: {exc}", exc_info=True)
-                raise
+            raise
+            
+async def create_initial_commit(repo: str):
+    """
+    Create initial commit in an empty GitHub repo by adding README.md file.
+    """
+    url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/contents/README.md"
+    readme_content = "# Initial Commit\n\nThis is the initial commit."
+    encoded_content = base64.b64encode(readme_content.encode("utf-8")).decode("utf-8")
+    payload = {
+        "message": "Initial commit with README.md",
+        "content": encoded_content,
+        "branch": "main"
+    }
 
 
+    async with httpx.AsyncClient() as client:
+        resp = await retry_request(client.put, url, headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+async def get_tree_sha(repo: str, commit_sha: str) -> str:
+    commit_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/commits/{commit_sha}"
+    async with httpx.AsyncClient() as client:
+        commit_resp = await retry_request(client.get, commit_url, headers=headers)
+        commit_resp.raise_for_status()
+        return commit_resp.json()["tree"]["sha"]
+
+async def create_blob(repo: str, file: FileContext) -> str:
+    blob_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/blobs"
+    blob_payload = {
+        "content": file.file_content,
+        "encoding": "utf-8"
+    }
+    async with httpx.AsyncClient() as client:
+        blob_resp = await retry_request(client.post, blob_url, headers=headers, json=blob_payload)
+        blob_resp.raise_for_status()
+        return blob_resp.json()["sha"]
+    
+async def create_tree(repo: str, tree_sha: Optional[str], blob_entries: List[dict]) -> str:
+    tree_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/trees"
+    tree_payload = {"tree": blob_entries}
+    if tree_sha:
+        tree_payload["base_tree"] = tree_sha
+    async with httpx.AsyncClient() as client:
+        tree_resp = await retry_request(client.post, tree_url, headers=headers, json=tree_payload)
+        tree_resp.raise_for_status()
+        return tree_resp.json()["sha"]
+
+async def create_commit(repo: str, commit_message: str, new_tree_sha: str, commit_sha: Optional[str]) -> str:
+    commit_payload = {
+        "message": commit_message,
+        "tree": new_tree_sha,
+    }
+    if commit_sha:
+        commit_payload["parents"] = [commit_sha]
+
+    new_commit_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/commits"
+    async with httpx.AsyncClient() as client:
+        new_commit_resp = await retry_request(client.post, new_commit_url, headers=headers, json=commit_payload)
+        new_commit_resp.raise_for_status()
+        return new_commit_resp.json()["sha"]
+    
+async def update_ref(repo: str, new_commit_sha: str, commit_sha_exists: bool):
+    update_ref_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/refs/heads/main"
+    async with httpx.AsyncClient() as client:
+        if not commit_sha_exists:
+            # Create ref since it doesn't exist yet
+            ref_create_payload = {
+                "ref": f"refs/heads/main",
+                "sha": new_commit_sha,
+            }
+            update_resp = await retry_request(client.post, update_ref_url.replace("/git/refs/heads", "/git/refs"), headers=headers, json=ref_create_payload)
+        else:
+            update_resp = await retry_request(client.patch, update_ref_url, headers=headers, json={"sha": new_commit_sha})
+
+        update_resp.raise_for_status()
 
 async def push_files_to_github_repo(
     repo: str,
     files: List[FileContext],
-    commit_message: str = "Add generated files",
-) -> Optional[str]:
+    commit_message: str = "Add generated project files",
+):
     """
-    Pushes files individually to the GitHub repo using the 'create or update file' API endpoint.
-    Returns the SHA of the last commit made.
+    Pushes files to a GitHub repository via REST API by creating or updating blobs and commits.
     """
+    commit_sha = await get_latest_commit_sha(repo)
+    # Create initial commit if repo is empty
+    if commit_sha is None:
+        logger.info(f"No commits found in {repo}. Creating initial commit.")
+        await create_initial_commit(repo)
+        commit_sha = await get_latest_commit_sha(repo)
+        if commit_sha is None:
+            raise RuntimeError("Failed to create initial commit")
 
-    last_commit_sha = None
+    commit_sha_exists = bool(commit_sha)
 
     async with httpx.AsyncClient() as client:
-        for file in files:
-            try:
-                url = f"https://api.github.com/repos/{OWNER}/{repo}/contents/{file.file_name}"
+        try:
+            tree_sha = None
+            if commit_sha_exists:
+                tree_sha = await get_tree_sha(repo, commit_sha)
 
-                # Check if the file exists to get its sha (required for updates)
-                get_resp = await client.get(url, headers=headers, params={"ref": "main"})
-                if get_resp.status_code == 200:
-                    sha = get_resp.json()["sha"]
-                elif get_resp.status_code == 404:
-                    sha = None  # File doesn't exist, create new
-                else:
-                    get_resp.raise_for_status()  # Raise for other HTTP errors
+            blob_entries = []
+            for file in files:
+                blob_sha = await create_blob(repo, file)
+                blob_entries.append({
+                    "path": file.file_name,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": blob_sha,
+                })
 
-                payload = {
-                    "message": commit_message,
-                    "content": base64.b64encode(file.file_content.encode("utf-8")).decode("utf-8"),
-                    "branch": "main",
-                }
-                if sha:
-                    payload["sha"] = sha
+            new_tree_sha = await create_tree(repo, tree_sha, blob_entries)
+            new_commit_sha = await create_commit(repo, commit_message, new_tree_sha, commit_sha)
+            await update_ref(repo, new_commit_sha, commit_sha_exists)
 
-                resp = await client.put(url, headers=headers, json=payload)
-                resp.raise_for_status()
+            logger.info(f"Committed files to {OWNER}/{repo}@main with commit SHA {new_commit_sha}")
+            return  new_commit_sha
 
-                last_commit_sha = resp.json()["commit"]["sha"]
-                logger.info(f"Committed {file.file_name} (sha: {last_commit_sha})")
-
-            except httpx.HTTPStatusError as http_err:
-                logger.error(f"GitHub API HTTP error for file {file.file_name}: {http_err.response.status_code} {http_err.response.text}")
-                raise
-            except httpx.RequestError as req_err:
-                logger.error(f"Network error while pushing file {file.file_name}: {req_err}")
-                raise
-            except Exception as exc:
-                logger.error(f"Unexpected error for file {file.file_name}: {exc}", exc_info=True)
-                raise
-
-    return last_commit_sha
-
+        except Exception as e:
+            logger.error(f"Error pushing files to GitHub repo: {e}", exc_info=True)
+            raise
 
 async def enable_github_pages(repo: str):
     url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/pages"
@@ -123,13 +184,29 @@ async def enable_github_pages(repo: str):
 
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(url, json=payload, headers=headers)
+            response = await retry_request(client.post, url, json=payload, headers=headers)
             response.raise_for_status()
+            json_data = response.json()
             logger.info(f"GitHub Pages enabled for {OWNER}/{repo}@main/")
-            return response.json()
+            return {
+                "repo_url": f"https://github.com/{OWNER}/{repo}",
+                "pages_url": json_data.get("html_url")
+            }
         except httpx.HTTPStatusError as exc:
-            logger.error(f"Failed to enable GitHub Pages: {exc.response.status_code} - {exc.response.text}")
-            raise
+            if exc.response.status_code == 409:
+                # Pages already enabled, fetch existing pages info instead of error
+                info_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/pages"
+                info_resp = await client.get(info_url, headers=headers)
+                info_resp.raise_for_status()
+                data = info_resp.json()
+                logger.info(f"GitHub Pages already enabled for {OWNER}/{repo}@main/")
+                return {
+                    "repo_url": f"https://github.com/{OWNER}/{repo}",
+                    "pages_url": data.get("html_url")
+                }
+            else:
+                logger.error(f"Failed to enable GitHub Pages: {exc.response.status_code} - {exc.response.text}")
+                raise
         except Exception as e:
             logger.error(f"Unexpected error enabling GitHub Pages: {str(e)}")
             raise
