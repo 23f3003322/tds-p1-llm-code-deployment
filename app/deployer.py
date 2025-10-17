@@ -211,6 +211,48 @@ async def enable_github_pages(repo: str):
             logger.error(f"Unexpected error enabling GitHub Pages: {str(e)}")
             raise
 
+async def get_ref_sha( repo:str):
+    url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/ref/heads/main"
+    async with httpx.AsyncClient() as client:
+        response = await retry_request(client.get, url, headers=headers)
+        response.raise_for_status()
+        return response.json()["object"]["sha"]
+
+async def get_blob_content( repo, sha):
+    url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/blobs/{sha}"
+    async with httpx.AsyncClient() as client:
+        response = await retry_request(client.get, url, headers=headers)
+        response.raise_for_status()
+        blob_data = response.json()
+        return base64.b64decode(blob_data["content"]).decode("utf-8")
+
+async def get_files_from_github_repo(repo: str) -> List[FileContext]:
+    """
+    Fetches all files in the specified GitHub repo and branch using the GitHub API.
+    Returns a list of FileContext objects with filename and decoded content.
+    """
+
+    try:
+        commit_sha = await get_ref_sha( repo)
+        tree_sha = await get_tree_sha( repo, commit_sha)
+        # Fetch the tree with recursive=1
+        tree_url = f"{GITHUB_API_URL}repos/{OWNER}/{repo}/git/trees/{tree_sha}?recursive=1"
+        async with httpx.AsyncClient() as client:
+            response = await retry_request(client.get, tree_url, headers=headers)
+            response.raise_for_status()
+            tree_data = response.json()
+
+        files = []
+        for item in tree_data["tree"]:
+            if item["type"] == "blob":
+                content = await get_blob_content( repo, item["sha"])
+                files.append(FileContext(file_name=item["path"], file_content=content))
+        return files
+    except Exception as e:
+        logger.error(f"Error getting files from GitHub repo: {e}", exc_info=True)
+        raise
+
+
 
 async def notify_evaluation_url(evaluation_url: str, payload: dict):
     async with httpx.AsyncClient() as client:

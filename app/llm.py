@@ -36,6 +36,7 @@ Requirements:
 - If attachments are present, they should be used within the project logically matching the task description.
 - Provide all files necessary for deployment including at least an index.html.
 - Write a thorough README.md that includes:
+ -  the exact provided brief for the code generation  with the heading 'main goal' 
   - Project summary
   - Setup instructions for GitHub Pages
   - Usage guide
@@ -121,3 +122,135 @@ Focus on quality, clarity, and correctness to deliver a ready-to-use GitHub Page
         logger.error(f"Error generating code with LLM: {e}", exc_info=True)
         # Raise runtime error to caller or optionally return empty list/fallback output
         raise RuntimeError(f"LLM code generation failed: {e}") from e
+
+
+async def round2_code_modification_function(
+    files: List[FileContext],
+    task_object: TaskRequest
+) -> List[FileContext]:
+    """
+    Minimal Round 2 function - prevents loops by being ultra simple
+    """
+    print("Starting minimal Round 2 modification...")
+    
+    try:
+        attachments_text = ""
+        if task_object.attachments and len(task_object.attachments) > 0:
+            attachments_text = "\nAttachments:\n" + "\n".join([f"- {att.name}: {att.url[:80]}..." for att in task_object.attachments])
+        else:
+            attachments_text = "\n(No attachments were provided with the request)"
+        # Create simple file info for the AI
+        
+        files_str = "\n\n".join(
+        [f"--- START FILE: {f.file_name} ---\n{f.file_content}\n--- END FILE: {f.file_name} ---" for f in files])
+
+        # This is how you would create it in your Python function
+# using f-strings.
+
+        prompt = f"""
+        **Objective:** Modify the following web project to satisfy the user's brief and pass all acceptance criteria.
+
+        ---
+
+        ### **User's Brief**
+
+        "{task_object.brief}"
+
+       ### **attachments given by user(if any)**
+
+       "{attachments_text}
+
+        ---
+
+        ### **Acceptance Criteria (Checks)**
+
+        The final code **MUST** pass all of the following checks. These are non-negotiable JavaScript expressions that will be evaluated in the browser's console. A failure to pass these checks means the task is a failure.
+
+        {task_object.checks}
+
+
+
+        ---
+
+        ### **Project Files**
+
+        Here are the complete contents of all files in the project. Analyze them and apply your changes where necessary.
+
+        {files_str}
+
+        ---
+
+        **Final Instruction:**
+        Perform the required modifications based on the brief and checks. Now, return the complete list of all project files in the required format.
+        """
+        
+        
+        
+        simple_agent = Agent(
+    "openai:gpt-5-nano",
+    result_type=List[FileContext],
+    system_prompt=""" You are an expert AI software developer specializing in frontend web technologies (HTML, CSS, and JavaScript). Your primary mission is to intelligently modify an existing codebase to fulfill a user's request while adhering to a strict set of rules.
+
+**Your Core Directives:**
+
+1.  **Principle of Minimal Change:** You must operate on the principle of minimal intervention. Your goal is to be a precise surgical tool, not a wrecking ball. Only make the changes necessary to satisfy the user's brief. Do not refactor, rewrite, or alter code that is not directly related to the task.
+
+2.  **Preserve File Integrity:** Do not add or delete files from the project unless the user's brief explicitly and unambiguously instructs you to do so. The structure of the project must be maintained.
+
+3.  **Completeness is Mandatory:** Your final output MUST include the complete content of ALL original files provided to you, even the files you did not modify. This is non-negotiable and ensures the entire project context is returned.
+
+4.  **Strict Adherence to Checks:** The user will provide a list of "checks" (JavaScript expressions). The modified code must ensure that every single one of these expressions evaluates to `true`. These checks are your primary definition of success.
+
+5.  **Focus on Static Deployment:** Assume the final code needs to be immediately deployable to a static hosting service like GitHub Pages. Do not introduce any server-side logic, dependencies, or build steps unless specifically requested.
+
+6.  **No Conversational Output:** Do not provide explanations, apologies, or any conversational text in your final output. Your response must strictly be the structured data containing the list of files and their content.
+    """
+    
+)
+        
+        # Run with strict limits to prevent loops
+        result = await simple_agent.run(prompt)
+        
+        # print(result)
+        return result.data
+        
+    except Exception as e:
+        print(f"AI modification failed: {e}")
+        print("Using text-based fallback...")
+
+
+
+
+
+
+prompt="""
+Analyze the existing codebase and implement the following requirement with minimal changes:
+
+Requirements:
+1. Make only targeted modifications to implement the new functionality
+2. Do not rewrite entire files - add incrementally to existing code
+3. Ensure all JavaScript validation checks pass
+4. Update the README to document the changes
+5. Maintain GitHub Pages compatibility
+6. Preserve all existing functionality
+
+Please analyze the code, understand the requirements, and provide the modified files.
+"""
+
+
+system_prompt="""You are an expert web developer tasked with making minimal, targeted modifications to an existing GitHub Pages codebase. 
+
+Your responsibilities:
+1. Analyze the existing code structure and functionality thoroughly
+2. Make ONLY the minimal changes needed to implement the new brief requirements
+3. Do NOT rewrite entire files or change the overall structure
+4. Ensure all modifications will pass the provided JavaScript validation checks
+5. Update the README file to reflect the changes made
+6. Preserve all existing functionality while adding new features
+
+Guidelines:
+- Add new elements, functions, or styles incrementally
+- Modify existing code only when absolutely necessary
+- Test your changes against validation checks mentally before finalizing
+- Keep the same coding style and patterns as the original code
+- Focus on GitHub Pages compatibility (static HTML, CSS, JS only)"""

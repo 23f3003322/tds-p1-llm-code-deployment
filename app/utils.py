@@ -2,7 +2,7 @@ import os
 import httpx
 import logging
 import asyncio
-API_SECRET = os.getenv("API_SECRET", "shamil")
+API_SECRET = os.getenv("API_SECRET",)
 
 
 logger = logging.getLogger(__name__)
