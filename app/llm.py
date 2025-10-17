@@ -110,13 +110,13 @@ Focus on quality, clarity, and correctness to deliver a ready-to-use GitHub Page
     try:
         agent = Agent(
             "openai:gpt-5-nano",
-            result_type=List[FileContext],
+            output_type=List[FileContext],
             system_prompt=system_prompt
         )
         result = await agent.run(prompt)
         logger.info("Successfully generated code with LLM")
         # print(result.data)
-        return result.data
+        return result.output
     except Exception as e:
         # Log the error with traceback
         logger.error(f"Error generating code with LLM: {e}", exc_info=True)
@@ -188,7 +188,7 @@ async def round2_code_modification_function(
         
         simple_agent = Agent(
     "openai:gpt-5-nano",
-    result_type=List[FileContext],
+    output_type=List[FileContext],
     system_prompt=""" You are an expert AI software developer specializing in frontend web technologies (HTML, CSS, and JavaScript). Your primary mission is to intelligently modify an existing codebase to fulfill a user's request while adhering to a strict set of rules.
 
 **Your Core Directives:**
@@ -212,7 +212,7 @@ async def round2_code_modification_function(
         result = await simple_agent.run(prompt)
         
         # print(result)
-        return result.data
+        return result.output
         
     except Exception as e:
         print(f"AI modification failed: {e}")
